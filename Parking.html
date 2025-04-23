@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Estacionamientos BOB - Sistema</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dayjs@1.11.10/dayjs.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dayjs@1.11.10/plugin/relativeTime.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dayjs@1.11.10/plugin/duration.js"></script> <script src="https://cdn.jsdelivr.net/npm/dayjs@1.11.10/locale/es.js"></script>
+    <style>
+        /* Custom styles */
+        body {
+            font-family: 'Inter', sans-serif; /* Tailwind's default font */
+            background-color: #f1f5f9; /* slate-100 */
+        }
+        /* Modal Transition */
+        .fade-enter-active, .fade-leave-active {
+          transition: opacity 0.3s ease;
+        }
+        .fade-enter-from, .fade-leave-to {
+          opacity: 0;
+        }
+        /* Simple barcode simulation */
+        .barcode {
+            height: 40px;
+            display: flex;
+            align-items: flex-end; /* Align bars to bottom */
+            overflow: hidden;
+            border: 1px solid #ccc;
+            background-color: white;
+            min-width: 100px; /* Ensure barcode has some width */
+        }
+        .barcode-bar {
+            background-color: black;
+            height: 100%; /* Full height initially */
+            flex-grow: 0; /* Prevent bars from growing */
+            flex-shrink: 0; /* Prevent bars from shrinking */
+        }
+        /* Style buttons consistently */
+        .btn {
+            @apply px-4 py-2 rounded font-semibold transition duration-150 ease-in-out shadow focus:outline-none focus:ring-2 focus:ring-offset-2;
+        }
+        .btn-primary {
+            @apply bg-blue-600 text-white hover:bg-blue-700 focus:ring-blue-500;
+        }
+        .btn-secondary {
+             @apply bg-gray-600 text-white hover:bg-gray-700 focus:ring-gray-500;
+        }
+        .btn-success {
+             @apply bg-green-600 text-white hover:bg-green-700 focus:ring-green-500;
+        }
+        .btn-danger {
+             @apply bg-red-600 text-white hover:bg-red-700 focus:ring-red-500;
+        }
+        .btn:disabled {
+            @apply opacity-50 cursor-not-allowed;
+        }
+        /* Input styling */
+        .input-field {
+            @apply mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm;
+        }
+        /* Card styling */
+        .card {
+            @apply bg-white p-6 rounded-lg shadow-md border border-gray-200;
+        }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+
+    <div id="app" class="max-w-6xl mx-auto">
+
+        <header class="card mb-8 flex flex-col md:flex-row justify-between items-center">
+            <h1 class="text-3xl font-bold text-blue-800 mb-4 md:mb-0">Estacionamientos BOB</h1>
+            <div class="text-lg font-semibold text-gray-700 bg-gray-100 px-4 py-2 rounded-md shadow-sm">
+                <span class="mr-2">🕒</span> {{ currentTime }}
+            </div>
+        </header>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+
+            <section class="card">
+                <h2 class="text-xl font-semibold mb-4 text-gray-800 border-b pb-2">Emitir Boleto de Entrada</h2>
+                <div class="space-y-4">
+                    <div>
+                        <label for="plate" class="block text-sm font-medium text-gray-700">Número de Placas:</label>
+                        <input type="text" id="plate" v-model.trim="newPlate" @keyup.enter="issueTicket"
+                               placeholder="Ej: ABC-123" class="input-field uppercase">
+                        <p v-if="issueError" class="text-red-500 text-sm mt-1">{{ issueError }}</p>
+                    </div>
+                    <button @click="issueTicket" :disabled="!newPlate" class="btn btn-primary w-full">
+                        Registrar Entrada y Ver Boleto
+                    </button>
+                </div>
+            </section>
+
+            <section class="card">
+                <h2 class="text-xl font-semibold mb-4 text-gray-800 border-b pb-2">Cobrar Estacionamiento</h2>
+                 <div class="space-y-4">
+                    <div>
+                        <label for="ticketId" class="block text-sm font-medium text-gray-700">ID del Boleto (o escanear):</label>
+                        <input type="text" id="ticketId" v-model.trim="ticketToChargeId" @keyup.enter="prepareCharge"
+                               placeholder="Ingrese el ID del boleto" class="input-field">
+                         <p v-if="chargeError" class="text-red-500 text-sm mt-1">{{ chargeError }}</p>
+                    </div>
+                    <button @click="prepareCharge" :disabled="!ticketToChargeId" class="btn btn-success w-full">
+                        Calcular Cobro
+                    </button>
+                </div>
+            </section>
+
+        </div>
+
+        <section class="card mt-8">
+             <h2 class="text-xl font-semibold mb-4 text-gray-800 border-b pb-2">Vehículos Estacionados Actualmente</h2>
+             <div v-if="currentlyParkedTickets.length > 0" class="overflow-x-auto">
+                 <table class="min-w-full divide-y divide-gray-200">
+                     <thead class="bg-gray-50">
+                         <tr>
+                             <th scope="col" class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID Boleto</th>
+                             <th scope="col" class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Placas</th>
+                             <th scope="col" class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Hora Entrada</th>
+                             <th scope="col" class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tiempo Transcurrido</th>
+                         </tr>
+                     </thead>
+                     <tbody class="bg-white divide-y divide-gray-200">
+                         <tr v-for="ticket in currentlyParkedTickets" :key="ticket.id">
+                             <td class="px-4 py-2 whitespace-nowrap text-sm font-mono text-gray-700">{{ ticket.id }}</td>
+                             <td class="px-4 py-2 whitespace-nowrap text-sm font-medium text-gray-900">{{ ticket.plate }}</td>
+                             <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-600">{{ formatDateTime(ticket.entryTime) }}</td>
+                             <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-600">{{ timeElapsed(ticket.entryTime) }}</td>
+                         </tr>
+                     </tbody>
+                 </table>
+             </div>
+             <div v-else class="text-center text-gray-500 py-4">
+                 No hay vehículos estacionados actualmente.
+             </div>
+        </section>
+
+        <transition name="fade">
+            <div v-if="showTicketModal"
+                 class="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4"
+                 @click.self="closeTicketModal"> <div class="bg-white rounded-lg shadow-xl w-full max-w-sm overflow-hidden">
+                    <div class="bg-blue-700 text-white p-4 text-center">
+                        <h3 class="text-xl font-bold">Estacionamientos BOB</h3>
+                        <p class="text-sm">Boleto de Entrada</p>
+                    </div>
+                    <div class="p-6 space-y-3 text-gray-800">
+                        <div>
+                            <p class="text-xs font-semibold uppercase text-gray-500">ID Boleto:</p>
+                            <p class="text-lg font-mono font-bold">{{ ticketModalData.id }}</p>
+                            <div class="barcode mt-1" aria-label="Simulación de código de barras">
+                                <div v-for="(char, index) in ticketModalData.id?.split('') || []"
+                                     :key="index"
+                                     class="barcode-bar"
+                                     :style="{ width: (Math.random() * 3 + 1) + 'px', marginRight: '1px' }">
+                                     </div>
+                            </div>
+                        </div>
+                         <div>
+                            <p class="text-xs font-semibold uppercase text-gray-500">Placas:</p>
+                            <p class="text-lg font-medium">{{ ticketModalData.plate }}</p>
+                        </div>
+                         <div>
+                            <p class="text-xs font-semibold uppercase text-gray-500">Hora de Entrada:</p>
+                            <p class="text-lg">{{ formatDateTime(ticketModalData.entryTime, true) }}</p>
+                        </div>
+                        <p class="text-xs text-center text-gray-500 pt-2">Conserve este boleto. Tarifa: ${{ parkingRate }} por hora o fracción.</p>
+                    </div>
+                     <div class="bg-gray-100 px-6 py-3 text-right">
+                         <button @click="closeTicketModal" class="btn btn-secondary">Cerrar</button>
+                    </div>
+                </div>
+            </div>
+        </transition>
+
+        <transition name="fade">
+            <div v-if="showChargeModal"
+                 class="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4"
+                 @click.self="closeChargeModal"> <div class="bg-white rounded-lg shadow-xl w-full max-w-md overflow-hidden">
+                     <div class="bg-green-700 text-white p-4 text-center">
+                        <h3 class="text-xl font-bold">Detalle de Cobro</h3>
+                    </div>
+                     <div v-if="chargeModalData.id" class="p-6 space-y-3 text-gray-800">
+                         <div>
+                            <p class="text-xs font-semibold uppercase text-gray-500">ID Boleto:</p>
+                            <p class="text-lg font-mono">{{ chargeModalData.id }}</p>
+                        </div>
+                         <div>
+                            <p class="text-xs font-semibold uppercase text-gray-500">Placas:</p>
+                            <p class="text-lg font-medium">{{ chargeModalData.plate }}</p>
+                        </div>
+                        <div class="grid grid-cols-2 gap-4 border-t pt-3 mt-3">
+                            <div>
+                                <p class="text-xs font-semibold uppercase text-gray-500">Hora Entrada:</p>
+                                <p>{{ formatDateTime(chargeModalData.entryTime) }}</p>
+                            </div>
+                             <div>
+                                <p class="text-xs font-semibold uppercase text-gray-500">Hora Salida:</p>
+                                <p>{{ formatDateTime(chargeModalData.exitTime) }}</p>
+                            </div>
+                        </div>
+                         <div>
+                            <p class="text-xs font-semibold uppercase text-gray-500">Tiempo Total:</p>
+                            <p v-if="chargeModalData.duration">{{ chargeModalData.duration.humanized }} ({{ chargeModalData.duration.hours }} horas, {{ chargeModalData.duration.minutes }} minutos)</p>
+                             <p v-else>Calculando...</p>
+                        </div>
+                         <div class="border-t pt-3 mt-3">
+                            <p class="text-xs font-semibold uppercase text-gray-500">Tarifa por Hora:</p>
+                            <p>${{ parkingRate.toFixed(2) }}</p>
+                        </div>
+                        <div class="border-t pt-3 mt-3 text-right">
+                            <p class="text-sm font-semibold uppercase text-gray-500">Total a Pagar:</p>
+                            <p class="text-2xl font-bold text-green-700">${{ chargeModalData.totalAmount?.toFixed(2) || '0.00' }}</p>
+                        </div>
+                    </div>
+                     <div class="bg-gray-100 px-6 py-4 flex justify-between items-center">
+                         <button @click="closeChargeModal" class="btn btn-secondary">Cancelar</button>
+                         <button @click="processPayment" :disabled="!chargeModalData.id" class="btn btn-success">Confirmar Pago</button>
+                    </div>
+                </div>
+            </div>
+        </transition>
+
+        <transition name="fade">
+            <div v-if="notification.message"
+                 :class="['fixed bottom-4 right-4 p-4 rounded-lg shadow-lg text-white z-60', notification.type === 'success' ? 'bg-green-600' : 'bg-red-600']">
+                {{ notification.message }}
+            </div>
+        </transition>
+
+    </div>
+
+    <script>
+        // Initialize Day.js plugins and locale
+        // Ensure plugins are loaded before use
+        if (typeof dayjs_plugin_relativeTime !== 'undefined') {
+            dayjs.extend(dayjs_plugin_relativeTime);
+        } else {
+            console.error("Day.js relativeTime plugin not loaded!");
+        }
+        if (typeof dayjs_plugin_duration !== 'undefined') { // Added check for duration plugin
+             dayjs.extend(dayjs_plugin_duration);
+        } else {
+             console.error("Day.js duration plugin not loaded!");
+        }
+        dayjs.locale('es');
+
+        const { createApp, ref, onMounted, onUnmounted, computed } = Vue;
+
+        createApp({
+            setup() {
+                // --- Reactive State ---
+                const currentTime = ref('--:--:--'); // Initial placeholder
+                const parkingRate = ref(15.00); // Example: $15.00 per hour
+                const allTickets = ref([]); // Array for ALL tickets { id, plate, entryTime, exitTime?, amountPaid? }
+                const newPlate = ref(''); // Input for new license plate
+                const ticketToChargeId = ref(''); // Input for ticket ID to charge
+                const showTicketModal = ref(false); // Controls ticket modal visibility
+                const ticketModalData = ref({}); // Data for the ticket modal
+                const showChargeModal = ref(false); // Controls charge modal visibility
+                const chargeModalData = ref({}); // Data for the charge calculation modal
+                const issueError = ref(''); // Error message for issuing ticket
+                const chargeError = ref(''); // Error message for charging ticket
+                const notification = ref({ message: '', type: 'success' }); // For user feedback { message, type }
+                let clockInterval = null; // Interval ID for the clock
+
+                // --- Computed Properties ---
+                // Filter tickets to show only those currently parked (no exitTime)
+                const currentlyParkedTickets = computed(() => {
+                    return allTickets.value.filter(ticket => !ticket.exitTime);
+                });
+
+                // --- Methods ---
+
+                // Format date and time using Day.js
+                const formatDateTime = (date, includeSeconds = false) => {
+                    try {
+                        if (!date) return '';
+                        const formatString = includeSeconds ? 'DD/MM/YYYY HH:mm:ss' : 'DD/MM/YYYY HH:mm';
+                        return dayjs(date).format(formatString);
+                    } catch (error) {
+                        console.error("Error formatting date:", date, error);
+                        return "Fecha inválida";
+                    }
+                };
+
+                // Calculate time elapsed since entry
+                const timeElapsed = (entryTime) => {
+                    try {
+                        if (!entryTime) return '';
+                        // Ensure entryTime is valid before calculating difference
+                        const entry = dayjs(entryTime);
+                        if (!entry.isValid()) return "Entrada inválida";
+                        return entry.fromNow(true); // true removes "hace" prefix
+                    } catch (error) {
+                        console.error("Error calculating time elapsed:", entryTime, error);
+                        return "Error";
+                    }
+                };
+
+                // Update the clock display
+                const updateTime = () => {
+                    try {
+                         currentTime.value = dayjs().format('DD/MM/YYYY HH:mm:ss');
+                    } catch(error) {
+                        console.error("Error updating time:", error);
+                        currentTime.value = "Error de reloj";
+                        if(clockInterval) clearInterval(clockInterval); // Stop interval if error occurs
+                    }
+                };
+
+                // Generate a unique ticket ID (simple version)
+                const generateTicketId = () => {
+                    try {
+                        // Combines timestamp with a random element for more uniqueness
+                        return `BOB-${Date.now().toString().slice(-6)}-${Math.random().toString(36).substring(2, 5).toUpperCase()}`;
+                    } catch (error) {
+                         console.error("Error generating ticket ID:", error);
+                         return `ERROR-${Date.now()}`; // Fallback ID
+                    }
+                };
+
+                // Show temporary notifications
+                const showNotification = (message, type = 'success', duration = 3000) => {
+                    notification.value = { message, type };
+                    // Use separate timeout to clear message
+                    setTimeout(() => {
+                        if (notification.value.message === message) { // Clear only if it's the same message
+                             notification.value.message = '';
+                        }
+                    }, duration);
+                };
+
+                // Issue a new parking ticket
+                const issueTicket = () => {
+                    issueError.value = ''; // Clear previous error
+                    try {
+                        if (!newPlate.value) {
+                            issueError.value = 'Por favor, ingrese el número de placas.';
+                            return;
+                        }
+
+                        const ticket = {
+                            id: generateTicketId(),
+                            plate: newPlate.value.toUpperCase(),
+                            entryTime: dayjs().toISOString() // Store as ISO string for consistency
+                            // exitTime and amountPaid will be added later
+                        };
+
+                        allTickets.value.push(ticket);
+                        ticketModalData.value = { ...ticket }; // Prepare data for modal (use copy)
+                        showTicketModal.value = true; // Show the modal
+                        newPlate.value = ''; // Clear the input field
+                        console.log("Ticket issued:", ticket);
+                        showNotification(`Boleto ${ticket.id} emitido para ${ticket.plate}.`);
+
+                        saveTicketsToLocalStorage();
+                    } catch (error) {
+                        console.error("Error issuing ticket:", error);
+                        issueError.value = "Error interno al emitir boleto.";
+                        showNotification("Error al emitir boleto.", "error");
+                    }
+                };
+
+                // Close the ticket modal
+                const closeTicketModal = () => {
+                    showTicketModal.value = false;
+                    ticketModalData.value = {}; // Clear modal data
+                };
+
+                // Prepare the charge calculation modal
+                const prepareCharge = () => {
+                    chargeError.value = ''; // Clear previous error
+                    chargeModalData.value = {}; // Clear previous charge data
+                    try {
+                        if (!ticketToChargeId.value) {
+                            chargeError.value = 'Por favor, ingrese el ID del boleto.';
+                            return;
+                        }
+
+                        const ticket = allTickets.value.find(t => t.id === ticketToChargeId.value);
+
+                        if (!ticket) {
+                            chargeError.value = `Boleto con ID "${ticketToChargeId.value}" no encontrado.`;
+                            return;
+                        }
+                        if (ticket.exitTime) {
+                            chargeError.value = `El boleto ${ticket.id} ya fue cobrado el ${formatDateTime(ticket.exitTime)}.`;
+                            ticketToChargeId.value = ''; // Clear input after showing error
+                            return;
+                        }
+
+                        const entry = dayjs(ticket.entryTime);
+                        const exit = dayjs(); // Current time is exit time
+
+                        // Validate dates before proceeding
+                        if (!entry.isValid()) {
+                             chargeError.value = `Fecha de entrada inválida para boleto ${ticket.id}.`;
+                             console.error("Invalid entry date:", ticket.entryTime);
+                             return;
+                        }
+
+                        const durationMinutes = exit.diff(entry, 'minute'); // Duration in minutes
+
+                        // Calculate hours, rounding up (charge for fractions of an hour)
+                        const durationHours = Math.ceil(durationMinutes / 60);
+                        // Ensure at least 1 hour is charged if duration > 0 minutes
+                        const billableHours = durationMinutes <= 0 ? 0 : Math.max(1, durationHours);
+
+                        const totalAmount = billableHours * parkingRate.value;
+
+                        // Prepare data for the charge modal
+                        chargeModalData.value = {
+                            ...ticket, // Copy ticket data
+                            exitTime: exit.toISOString(),
+                            duration: {
+                                totalMinutes: durationMinutes,
+                                hours: Math.floor(durationMinutes / 60),
+                                minutes: durationMinutes % 60,
+                                // Use dayjs.duration if available
+                                humanized: typeof dayjs.duration === 'function' ? dayjs.duration(durationMinutes, 'minutes').humanize() : `${Math.floor(durationMinutes / 60)}h ${durationMinutes % 60}m`
+                            },
+                            billableHours: billableHours,
+                            totalAmount: totalAmount
+                        };
+
+                        showChargeModal.value = true; // Show the modal
+                        console.log("Prepared charge for:", chargeModalData.value);
+
+                    } catch (error) {
+                         console.error("Error preparing charge:", error);
+                         chargeError.value = "Error interno al calcular el cobro.";
+                         showNotification("Error al calcular cobro.", "error");
+                    }
+                };
+
+                 // Process the payment after confirmation
+                const processPayment = () => {
+                    try {
+                         // Find the ticket index in the main array
+                        const ticketIndex = allTickets.value.findIndex(t => t.id === chargeModalData.value.id);
+
+                        if (ticketIndex !== -1) {
+                            // Mark the ticket as paid by adding exitTime and amountPaid
+                            // Use data directly from chargeModalData which is already calculated
+                            allTickets.value[ticketIndex].exitTime = chargeModalData.value.exitTime;
+                            allTickets.value[ticketIndex].amountPaid = chargeModalData.value.totalAmount;
+
+                            console.log("Payment processed for ticket:", allTickets.value[ticketIndex]);
+                            showNotification(`Cobro de $${chargeModalData.value.totalAmount.toFixed(2)} realizado para boleto ${chargeModalData.value.id}.`, 'success');
+
+                            // Update localStorage after marking as paid
+                            saveTicketsToLocalStorage();
+
+                        } else {
+                            // This case should ideally not happen if prepareCharge worked correctly
+                            console.error("Error: Ticket not found during payment processing. ID:", chargeModalData.value.id);
+                            showNotification(`Error al procesar pago para boleto ${chargeModalData.value.id}. No encontrado.`, 'error');
+                        }
+
+                        closeChargeModal(); // Close the modal
+                        ticketToChargeId.value = ''; // Clear the input field
+
+                    } catch (error) {
+                         console.error("Error processing payment:", error);
+                         showNotification("Error interno al procesar el pago.", "error");
+                    }
+                };
+
+
+                // Close the charge modal
+                const closeChargeModal = () => {
+                    showChargeModal.value = false;
+                    chargeError.value = ''; // Clear error when closing modal
+                    chargeModalData.value = {}; // Clear charge data
+                };
+
+                 // --- LocalStorage Persistence ---
+                const saveTicketsToLocalStorage = () => {
+                    try {
+                        // Save the entire history of tickets
+                        localStorage.setItem('bobParkingTickets', JSON.stringify(allTickets.value));
+                    } catch (e) {
+                        console.error("Error saving tickets to localStorage:", e);
+                        showNotification("Error al guardar datos locales.", "error", 5000);
+                    }
+                };
+
+                const loadTicketsFromLocalStorage = () => {
+                    try {
+                        const savedTickets = localStorage.getItem('bobParkingTickets');
+                        if (savedTickets) {
+                            // Load all tickets, the computed property will filter active ones
+                            allTickets.value = JSON.parse(savedTickets);
+                             console.log("Loaded tickets from localStorage:", allTickets.value.length);
+                        }
+                    } catch (e) {
+                        console.error("Error loading tickets from localStorage:", e);
+                        localStorage.removeItem('bobParkingTickets'); // Clear corrupted data
+                        showNotification("Error al cargar datos locales. Se reiniciaron los datos.", "error", 5000);
+                    }
+                };
+
+
+                // --- Lifecycle Hooks ---
+                onMounted(() => {
+                    // Load tickets from localStorage first
+                    loadTicketsFromLocalStorage();
+
+                    // Start the clock
+                    updateTime(); // Initial call
+                    clockInterval = setInterval(updateTime, 1000); // Update every second
+                });
+
+                onUnmounted(() => {
+                    // Clear the clock interval when the component is destroyed
+                    if (clockInterval) {
+                        clearInterval(clockInterval);
+                    }
+                });
+
+                // --- Return values ---
+                return {
+                    currentTime,
+                    parkingRate,
+                    // allTickets, // No need to expose all tickets directly to template
+                    currentlyParkedTickets, // Expose the computed property
+                    newPlate,
+                    ticketToChargeId,
+                    showTicketModal,
+                    ticketModalData,
+                    showChargeModal,
+                    chargeModalData,
+                    issueError,
+                    chargeError,
+                    notification,
+                    issueTicket,
+                    closeTicketModal,
+                    prepareCharge,
+                    processPayment,
+                    closeChargeModal,
+                    formatDateTime,
+                    timeElapsed // Expose for the active tickets list
+                };
+            }
+        }).mount('#app');
+    </script>
+
+</body>
+</html>
